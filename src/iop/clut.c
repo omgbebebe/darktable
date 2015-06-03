@@ -112,6 +112,8 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *
   const int ch = piece->colors;
   const int width = roi_out->width;
   const int height = roi_out->height;
+  int c,r;
+  r = c = 0;
 
 #ifdef _OPENMP
 #pragma omp parallel for default(none) schedule(static) shared(i, o, roi_in, roi_out, clut)
@@ -124,10 +126,12 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *
     
     for(int j = 0; j < width; j++, in += ch, out += ch)
     {
-      out[0] = clut[k*height + j];
+      out[0] = clut[c + r*width];
       out[1] = 0.0;
       out[2] = 0.0;
+      c++;
     }
+    r++;
   }
 //  for(int k = 0; k < 3; k++) piece->pipe->processed_maximum[k] = 1.0f;
 }
