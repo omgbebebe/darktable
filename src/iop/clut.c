@@ -73,6 +73,13 @@ typedef struct dt_iop_clut_data_t
   void *clut_data;
 } dt_iop_clut_data_t;
 
+typedef struct dt_iop_clut_color_t
+{
+  float red;
+  float green;
+  float blue;
+} dt_iop_clut_color_t;
+
 // this returns a translatable name
 const char *name()
 {
@@ -102,7 +109,7 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *
   fprintf(stderr,"[process]: bpp=%d\n", d->clut_bpp);
   fprintf(stderr,"[process]: data_size=%d\n", d->clut_data_size);
 
-  const float *clut = (float *)d->clut_data;
+  const dt_iop_clut_color_t *clut = (dt_iop_clut_color_t *)d->clut_data;
   /* for (int i=0; i < d->clut_data_size; i++) */
   /* { */
   /*   if(clut_data[i] != 0) fprintf(stderr,"%d ", clut_data[i]); */
@@ -112,8 +119,8 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *
   const int ch = piece->colors;
   const int width = roi_out->width;
   const int height = roi_out->height;
-  int c,r;
-  r = c = 0;
+//  const int clut_size = d->clut_size;
+  const int level = d->clut_level * d->clut_level;
 
 #ifdef _OPENMP
 #pragma omp parallel for default(none) schedule(static) shared(i, o, roi_in, roi_out, clut)
@@ -122,18 +129,94 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *
   {
     float *in = ((float *)i) + (size_t)k * ch * width;
     float *out = ((float *)o) + (size_t)k * ch * width;
-//    float *cl = ((float *)clut) + (size_t)k * ch * width;
-    
+    float MaxRGBDouble = 1.0f;
+
     for(int j = 0; j < width; j++, in += ch, out += ch)
     {
-      out[0] = clut[c + r*width];
-      out[1] = 0.0;
-      out[2] = 0.0;
-      c++;
+      uint32_t redaxis, greenaxis, blueaxis, color;
+      double sums[9], r, g, b, value;
+      long i;
+/*
+  Calculate the position of each 3D axis pixel level.
+*/
+      redaxis = (unsigned int) (((double) in[0]/MaxRGBDouble) * (level-1));
+      if (redaxis > level - 2)
+	redaxis = level - 2;
+      greenaxis = (unsigned int) (((double) in[1]/MaxRGBDouble) * (level-1));
+      if(greenaxis > level - 2)
+	greenaxis = level - 2;
+      blueaxis = (unsigned int) (((double) in[2]/MaxRGBDouble) * (level-1));
+      if(blueaxis > level - 2)
+	blueaxis = level - 2;
+
+      /*
+	Convert between the value and the equivalent value position.
+      */
+      r = ((double) in[0]/MaxRGBDouble) * (level - 1) - redaxis;
+      g = ((double) in[1]/MaxRGBDouble) * (level - 1) - greenaxis;
+      b = ((double) in[2]/MaxRGBDouble) * (level - 1) - blueaxis;
+
+      color = redaxis + greenaxis * level + blueaxis * level * level;
+
+      i = color;
+      sums[0] = ((double) clut[i].red) * (1 - r);
+      sums[1] = ((double) clut[i].green) * (1 - r);
+      sums[2] = ((double) clut[i].blue) * (1 - r);
+      i++;
+      sums[0] += ((double) clut[i].red) * r;
+      sums[1] += ((double) clut[i].green) * r;
+      sums[2] += ((double) clut[i].blue) * r;
+
+      i = (color + level);
+      sums[3] = ((double) clut[i].red) * (1 - r);
+      sums[4] = ((double) clut[i].green) * (1 - r);
+      sums[5] = ((double) clut[i].blue) * (1 - r);
+      i++;
+      sums[3] += ((double) clut[i].red) * r;
+      sums[4] += ((double) clut[i].green) * r;
+      sums[5] += ((double) clut[i].blue) * r;
+
+      sums[6] = sums[0] * (1 - g) + sums[3] * g;
+      sums[7] = sums[1] * (1 - g) + sums[4] * g;
+      sums[8] = sums[2] * (1 - g) + sums[5] * g;
+
+      i = (color + level * level);
+      sums[0] = ((double) clut[i].red) * (1 - r);
+      sums[1] = ((double) clut[i].green) * (1 - r);
+      sums[2] = ((double) clut[i].blue) * (1 - r);
+      i++;
+      sums[0] += ((double) clut[i].red) * r;
+      sums[1] += ((double) clut[i].green) * r;
+      sums[2] += ((double) clut[i].blue) * r;
+
+      i = (color + level * level + level);
+      sums[3] = ((double) clut[i].red) * (1 - r);
+      sums[4] = ((double) clut[i].green) * (1 - r);
+      sums[5] = ((double) clut[i].blue) * (1 - r);
+      i++;
+      sums[3] += ((double) clut[i].red) * r;
+      sums[4] += ((double) clut[i].green) * r;
+      sums[5] += ((double) clut[i].blue) * r;
+
+      sums[0] = sums[0] * (1 - g) + sums[3] * g;
+      sums[1] = sums[1] * (1 - g) + sums[4] * g;
+      sums[2] = sums[2] * (1 - g) + sums[5] * g;
+
+      value=(sums[6] * (1 - b) + sums[0] * b);
+      out[0] = value;
+
+      value=(sums[7] * (1 - b) + sums[1] * b);
+      out[1] = value;
+
+      value=(sums[8] * (1 - b) + sums[2] * b);
+      out[2] = value;
+
+      /* out[0] = cl[0]; */
+      /* out[1] = cl[1]; */
+      /* out[2] = cl[2]; */
     }
-    r++;
   }
-//  for(int k = 0; k < 3; k++) piece->pipe->processed_maximum[k] = 1.0f;
+  for(int k = 0; k < 3; k++) piece->pipe->processed_maximum[k] = 1.0f;
 }
 
 
@@ -196,6 +279,7 @@ void reload_defaults(dt_iop_module_t *module)
   if(!gd) goto end;
 
   gchar *qin = "select distinct id from images where   (flags & 256) != 256 and ((id in (select imgid from tagged_images as a join tags as b on a.tagid = b.id where name like 'HaldCLUT BW'))) order by filename, version limit ?1, ?2";
+//  gchar *qin = "select distinct id from images where   (flags & 256) != 256 and ((id in (select imgid from tagged_images as a join tags as b on a.tagid = b.id where name like 'bebebe'))) order by filename, version limit ?1, ?2";
 
   int imgid = -1;
   sqlite3_stmt *stmt;
@@ -224,16 +308,28 @@ void reload_defaults(dt_iop_module_t *module)
     goto end;
   }
    
-  uint32_t data_size = image.width * image.height * sizeof(float) * 3;
+  uint32_t data_size = image.width * image.height;
   fprintf(stderr,"[reload_defaults]: data_size: %d\n", data_size);
   fprintf(stderr,"[reload_defaults]: buf_width: %d\n", buf.width);
   fprintf(stderr,"[reload_defaults]: img_width: %d\n", image.width);
   gd->clut_size = image.width;
   gd->clut_bpp = image.bpp;
   gd->clut_level = CUBEROOT(image.width);
-  gd->clut_data = malloc(data_size);
+  gd->clut_data = calloc(data_size, sizeof(dt_iop_clut_color_t));
+  int k = 0;
+  /* float r, g, b; */
+  for (int i = 0; i < data_size; i++)
+  {
+    dt_iop_clut_color_t *c = (dt_iop_clut_color_t *)gd->clut_data;
+    float *bb = (float*)buf.buf;
+    c[i].red   = bb[k];
+    c[i].green = bb[k+1];
+    c[i].blue  = bb[k+2];
+    k += 4;
+    /* fprintf(stderr,"r=%3.2f;g=%3.2f;b=%3.2f\t", c[i].red, c[i].green, c[i].blue); */
+  }
   gd->clut_data_size = data_size;
-  memcpy(gd->clut_data, buf.buf, data_size);
+  /* memcpy(gd->clut_data, buf.buf, data_size); */
 
   fprintf(stderr,"[reload_defaults]: sizeof(float): %lu\n", sizeof(float));
   fprintf(stderr,"[reload_defaults]: cpp: %d\n", image.cpp);
