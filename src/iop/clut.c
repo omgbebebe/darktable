@@ -51,7 +51,10 @@ typedef struct dt_iop_clut_params_t
 typedef struct dt_iop_clut_gui_data_t
 {
   // self->gui_data
-  GtkWidget *scale; // this is needed by gui_update
+  GtkTreeView *films;
+  GtkListStore *films_list;
+  GtkNotebook *film_tabs;
+  GtkSizeGroup *sizegroup;
 } dt_iop_clut_gui_data_t;
 
 typedef struct dt_iop_clut_global_data_t
@@ -296,6 +299,12 @@ void reload_defaults(dt_iop_module_t *module)
 
   if (imgid == -1) goto end;
 
+//  GtkTreeIter   iter;
+//  gtk_list_store_append(g->films_list, &iter);
+//    char *str = calloc(128, sizeof(char));
+//    sprintf(str, "imgid: %d", imgid);
+//  gtk_list_store_set(g->films_list, &iter, 0, "bebebe", 1, TRUE, -1);
+
   dt_mipmap_buffer_t buf;
   dt_mipmap_cache_get(darktable.mipmap_cache, &buf, imgid, DT_MIPMAP_FULL,DT_MIPMAP_BLOCKING, 'r');
   const dt_image_t *img = dt_image_cache_get(darktable.image_cache, imgid, 'r');
@@ -358,6 +367,7 @@ void init(dt_iop_module_t *module)
   module->params_size = sizeof(dt_iop_clut_params_t);
   module->gui_data = NULL;
   module->priority = 901; // module order created by iop_dependencies.py, do not edit!
+  find_cluts("");
 }
 
 void cleanup(dt_iop_module_t *module)
@@ -380,15 +390,6 @@ void cleanup_global(dt_iop_module_so_t *module)
 
 
 /** put your local callbacks here, be sure to make them static so they won't be visible outside this file! */
-static void slider_callback(GtkWidget *w, dt_iop_module_t *self)
-{
-  // this is important to avoid cycles!
-  if(darktable.gui->reset) return;
-  //dt_iop_useless_params_t *p = (dt_iop_useless_params_t *)self->params;
-  //p->checker_scale = dt_bauhaus_slider_get(w);
-  // let core know of the changes
-  dt_dev_add_history_item(darktable.develop, self, TRUE);
-}
 
 /** gui callbacks, these are needed. */
 void gui_update(dt_iop_module_t *self)
@@ -404,9 +405,26 @@ void gui_init(dt_iop_module_t *self)
   // init the slider (more sophisticated layouts are possible with gtk tables and boxes):
   self->gui_data = malloc(sizeof(dt_iop_clut_gui_data_t));
   dt_iop_clut_gui_data_t *g = (dt_iop_clut_gui_data_t *)self->gui_data;
-  g->scale = dt_bauhaus_slider_new_with_range(self, 1, 100, 1, 50, 0);
-  self->widget = g->scale;
-  g_signal_connect(G_OBJECT(g->scale), "value-changed", G_CALLBACK(slider_callback), self);
+
+  self->widget = gtk_scrolled_window_new(NULL, NULL);
+  gtk_widget_set_size_request(self->widget, -1, DT_PIXEL_APPLY_DPI(208));
+  gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(self->widget), GTK_POLICY_AUTOMATIC, GTK_POLICY_ALWAYS);
+  g->films = GTK_TREE_VIEW(gtk_tree_view_new());
+  gtk_widget_set_size_request(GTK_WIDGET(g->films), DT_PIXEL_APPLY_DPI(50), -1);
+  gtk_container_add(GTK_CONTAINER(self->widget), GTK_WIDGET(g->films));
+
+  g->films_list = gtk_list_store_new (2, G_TYPE_STRING, G_TYPE_BOOLEAN);
+  gtk_tree_view_set_model(g->films, GTK_TREE_MODEL( g->films_list ));
+
+  GtkCellRenderer *renderer;
+  GtkTreeViewColumn *column;
+
+  renderer = gtk_cell_renderer_text_new ();
+  column = gtk_tree_view_column_new_with_attributes ("Film",
+                                                     renderer,
+                                                     "text", 0,
+                                                     NULL);
+  gtk_tree_view_append_column (GTK_TREE_VIEW (g->films), column);
 }
 
 void gui_cleanup(dt_iop_module_t *self)
@@ -430,19 +448,34 @@ gboolean is_valid_clut(const dt_image_t *img)
 int find_cluts(const char *tag)
 {
   fprintf(stderr,"[find_clut]: entry\n");
-  gchar *qin = "select distinct id from images where   (flags & 256) != 256 and ((id in (select imgid from tagged_images as a join tags as b on a.tagid = b.id where name like 'HaldCLUT BW'))) order by filename, version limit ?1, ?2";
+  gchar *qin = "select distinct id, filename from images where (flags & 256) != 256 and ((id in (select imgid from tagged_images as a join tags as b on a.tagid = b.id where name like 'HaldCLUT BW'))) order by filename, version limit ?1, ?2";
 
-  int imgid = -1;
+  GList *images = NULL;
+
   sqlite3_stmt *stmt;
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), qin, -1, &stmt, NULL);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, 0);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, 1);
-  if(sqlite3_step(stmt) == SQLITE_ROW)
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, 1000);
+  while(sqlite3_step(stmt) == SQLITE_ROW)
   {
-    imgid = sqlite3_column_int(stmt, 0);
+    const unsigned char *filename = sqlite3_column_text(stmt, 1);
+    size_t len = strlen((char*)filename);
+    char *fname = calloc(len+1,sizeof(char));
+    strncpy(fname,(char*)filename,len);
+//    int imgid = sqlite3_column_int(stmt, 0);
+    images = g_list_append(images, fname);
+//    sqlite3_step(stmt);
   }
   sqlite3_finalize(stmt);
-  return imgid;
+
+  fprintf(stderr,"[find_cluts]: print images\n");
+  GList *elem = NULL;
+  for(elem = images; elem != NULL; elem = elem->next)
+  {
+    char *s = (char*)elem->data;
+    fprintf(stderr,"item: %s\n", s);
+  }
+  return 0;
 }
 
 /** additional, optional callbacks to capture darkroom center events. */
