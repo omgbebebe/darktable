@@ -39,9 +39,6 @@ DT_MODULE_INTROSPECTION(1, dt_iop_clut_params_t)
 #define CUBE(X) (int)floor(pow(X,3.))
 // TODO: some build system to support dt-less compilation and translation!
 
-gboolean is_valid_clut(const dt_image_t*);
-int find_cluts(const char*);
-
 typedef struct dt_iop_clut_params_t
 {
   // self->params
@@ -57,14 +54,28 @@ typedef struct dt_iop_clut_gui_data_t
   GtkSizeGroup *sizegroup;
 } dt_iop_clut_gui_data_t;
 
-typedef struct dt_iop_clut_global_data_t
+/* typedef struct dt_iop_clut_global_data_t */
+/* { */
+/*   int clut_size; */
+/*   int clut_bpp; */
+/*   int clut_level; */
+/*   int clut_data_size; */
+/*   void *clut_data; */
+/*   GList *clut_collection; */
+/* } dt_iop_clut_global_data_t; */
+
+typedef enum dt_iop_clut_film_type_t
 {
-  int clut_size;
-  int clut_bpp;
-  int clut_level;
-  int clut_data_size;
-  void *clut_data;
-} dt_iop_clut_global_data_t;
+  FILM_TYPE_BW,
+  FILM_TYPE_COLOR,
+} dt_iop_film_type_t;
+
+typedef struct dt_iop_clut_collection_item_t
+{
+  uint32_t imgid;
+  char *filename;
+  dt_iop_film_type_t film_type;
+} dt_iop_clut_collection_item_t;
 
 typedef struct dt_iop_clut_data_t
 {
@@ -74,6 +85,7 @@ typedef struct dt_iop_clut_data_t
   int clut_level;
   int clut_data_size;
   void *clut_data;
+  GList *clut_collection;
 } dt_iop_clut_data_t;
 
 typedef struct dt_iop_clut_color_t
@@ -82,6 +94,16 @@ typedef struct dt_iop_clut_color_t
   float green;
   float blue;
 } dt_iop_clut_color_t;
+
+
+gboolean is_valid_clut(const dt_image_t*);
+void load_cluts(GList*, const char*);
+//void load_clut_by_imgid(dt_iop_clut_data_t *d, int imgid);
+void load_clut_by_imgid(int imgid, dt_iop_module_t *self);
+/* handle clut selection */
+static void _dt_iop_clut_row_changed_callback(GtkTreeView *treeview, dt_iop_module_t *self);
+
+
 
 // this returns a translatable name
 const char *name()
@@ -226,6 +248,8 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *
 void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pixelpipe_t *pipe,
                    dt_dev_pixelpipe_iop_t *piece)
 {
+  fprintf(stderr,"[commit_params]: entry\n");
+
   dt_iop_clut_params_t *p = (dt_iop_clut_params_t *)p1;
   if(0)
   {
@@ -233,28 +257,32 @@ void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pix
     fprintf(stderr,"[commit_params]: imgid=%d\n", p->imgid);
   }
   
-  dt_iop_clut_data_t *d = (dt_iop_clut_data_t *)piece->data;
-  dt_iop_clut_global_data_t *gd = (dt_iop_clut_global_data_t *)self->data;
+  dt_iop_clut_data_t *pd = (dt_iop_clut_data_t *)piece->data;
+  dt_iop_clut_data_t *d  = (dt_iop_clut_data_t *)self->data;
 
   /* gd->clut_bpp = 123; */
   /* gd->clut_data = calloc(64,sizeof(uint8_t)); */
   /* memset(gd->clut_data, 12, 64); */
 
-  d->clut_bpp = gd->clut_bpp;
-  d->clut_size = gd->clut_size;
-  d->clut_level = gd->clut_level;
-  d->clut_data_size = gd->clut_data_size;
-  d->clut_data = gd->clut_data;
+  pd->clut_bpp = d->clut_bpp;
+  pd->clut_size = d->clut_size;
+  pd->clut_level = d->clut_level;
+  pd->clut_data_size = d->clut_data_size;
+  pd->clut_data = d->clut_data;
 }
 
 void init_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
 {
+  fprintf(stderr,"[init_pipe]: entry\n");
+
   piece->data = calloc(1, sizeof(dt_iop_clut_data_t));
   self->commit_params(self, self->default_params, pipe, piece);
 }
 
 void cleanup_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev_pixelpipe_iop_t *piece)
 {
+  fprintf(stderr,"[cleanup_pipe]: entry\n");
+
 //  dt_iop_clut_data_t *d = (dt_iop_clut_data_t *)piece->data;
   free(piece->data);
   piece->data = NULL;
@@ -262,96 +290,43 @@ void cleanup_pipe(struct dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, dt_dev
 
 void init_global(dt_iop_module_so_t *module)
 {
-  dt_iop_clut_global_data_t *gd
-    = (dt_iop_clut_global_data_t *)calloc(1, sizeof(dt_iop_clut_global_data_t));
-  module->data = gd;
+  fprintf(stderr,"[init_global]: entry\n");
+
+  dt_iop_clut_data_t *d
+    = (dt_iop_clut_data_t *)calloc(1, sizeof(dt_iop_clut_data_t));
+  module->data = d;
+  
+  GList *l = g_list_alloc();
+  dt_iop_clut_collection_item_t *id = malloc(sizeof(dt_iop_clut_collection_item_t));
+  id->filename = "Identity";
+  id->imgid = -1;
+  l->data = id;
+  d->clut_collection = l;
+  load_cluts(l, "HaldCLUT BW");
+
+  if(!d->clut_collection) fprintf(stderr,"[init_gloabal]: NULL pointer to collection\n");
+  fprintf(stderr,"[init_global]: print images\n");
+
+  GList *elem = NULL;
+  for(elem = d->clut_collection; elem != NULL; elem = elem->next)
+  {
+    dt_iop_clut_collection_item_t *s = (dt_iop_clut_collection_item_t*)elem->data;
+    fprintf(stderr,"item: %s\n", s->filename);
+  }
+
 }
 
 void reload_defaults(dt_iop_module_t *module)
 {
+  fprintf(stderr,"[reload_defaults]: entry\n");
+
   dt_iop_clut_params_t tmp = { -1 };
   if(!module || !module->dev) goto end;
 
-  dt_iop_clut_global_data_t *gd = (dt_iop_clut_global_data_t *)module->data;
-  if (gd->clut_data)
-  {
-    free(gd->clut_data);
-    gd->clut_data = NULL;
-  }
+  load_clut_by_imgid(168, module);
+  /* dt_iop_clut_data_t *d = (dt_iop_clut_data_t *)module->data; */
 
-  if(!gd) goto end;
-
-  gchar *qin = "select distinct id from images where   (flags & 256) != 256 and ((id in (select imgid from tagged_images as a join tags as b on a.tagid = b.id where name like 'HaldCLUT BW'))) order by filename, version limit ?1, ?2";
-//  gchar *qin = "select distinct id from images where   (flags & 256) != 256 and ((id in (select imgid from tagged_images as a join tags as b on a.tagid = b.id where name like 'bebebe'))) order by filename, version limit ?1, ?2";
-
-  int imgid = -1;
-  sqlite3_stmt *stmt;
-  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), qin, -1, &stmt, NULL);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, 0);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, 1);
-  if(sqlite3_step(stmt) == SQLITE_ROW)
-  {
-    imgid = sqlite3_column_int(stmt, 0);
-  }
-  sqlite3_finalize(stmt);
-  fprintf(stderr,"[reload_defaults]: imgid: %d\n", imgid);
-  tmp.imgid = imgid;
-
-  if (imgid == -1) goto end;
-
-//  GtkTreeIter   iter;
-//  gtk_list_store_append(g->films_list, &iter);
-//    char *str = calloc(128, sizeof(char));
-//    sprintf(str, "imgid: %d", imgid);
-//  gtk_list_store_set(g->films_list, &iter, 0, "bebebe", 1, TRUE, -1);
-
-  dt_mipmap_buffer_t buf;
-  dt_mipmap_cache_get(darktable.mipmap_cache, &buf, imgid, DT_MIPMAP_FULL,DT_MIPMAP_BLOCKING, 'r');
-  const dt_image_t *img = dt_image_cache_get(darktable.image_cache, imgid, 'r');
-  dt_image_t image = *img;
-  dt_image_cache_read_release(darktable.image_cache, img);
-  if(!buf.buf)
-  {
-    dt_control_log(_("failed to get raw buffer from image `%s'"), image.filename);
-    dt_mipmap_cache_release(darktable.mipmap_cache, &buf);
-    goto end;
-  }
-   
-  uint32_t data_size = image.width * image.height;
-  fprintf(stderr,"[reload_defaults]: data_size: %d\n", data_size);
-  fprintf(stderr,"[reload_defaults]: buf_width: %d\n", buf.width);
-  fprintf(stderr,"[reload_defaults]: img_width: %d\n", image.width);
-  gd->clut_size = image.width;
-  gd->clut_bpp = image.bpp;
-  gd->clut_level = CUBEROOT(image.width);
-  gd->clut_data = calloc(data_size, sizeof(dt_iop_clut_color_t));
-  int k = 0;
-  /* float r, g, b; */
-  for (int i = 0; i < data_size; i++)
-  {
-    dt_iop_clut_color_t *c = (dt_iop_clut_color_t *)gd->clut_data;
-    float *bb = (float*)buf.buf;
-    c[i].red   = bb[k];
-    c[i].green = bb[k+1];
-    c[i].blue  = bb[k+2];
-    k += 4;
-    /* fprintf(stderr,"r=%3.2f;g=%3.2f;b=%3.2f\t", c[i].red, c[i].green, c[i].blue); */
-  }
-  gd->clut_data_size = data_size;
-  /* memcpy(gd->clut_data, buf.buf, data_size); */
-
-  fprintf(stderr,"[reload_defaults]: sizeof(float): %lu\n", sizeof(float));
-  fprintf(stderr,"[reload_defaults]: cpp: %d\n", image.cpp);
-  
-  /* uint8_t *dd = (uint8_t*)gd->clut_data; */
-  /* for (int i=0; i < data_size; i++) */
-  /* { */
-  /*   if(dd[i] != 0) fprintf(stderr,"%d ", dd[i]); */
-  /* } */
-  /* fprintf(stderr,"\n"); */
-
-
-  dt_mipmap_cache_release(darktable.mipmap_cache, &buf);
+  /* d->clut_bpp = 0; */
 
 end:
   memcpy(module->params, &tmp, sizeof(dt_iop_clut_params_t));
@@ -361,17 +336,20 @@ end:
 
 void init(dt_iop_module_t *module)
 {
+  fprintf(stderr,"[init]: entry\n");
+
   module->params = malloc(sizeof(dt_iop_clut_params_t));
   module->default_params = malloc(sizeof(dt_iop_clut_params_t));
   module->default_enabled = 0;
   module->params_size = sizeof(dt_iop_clut_params_t);
   module->gui_data = NULL;
   module->priority = 901; // module order created by iop_dependencies.py, do not edit!
-  find_cluts("");
 }
 
 void cleanup(dt_iop_module_t *module)
 {
+  fprintf(stderr,"[cleanup]: entry\n");
+
   free(module->gui_data);
   module->gui_data = NULL;
   free(module->params);
@@ -380,8 +358,10 @@ void cleanup(dt_iop_module_t *module)
 
 void cleanup_global(dt_iop_module_so_t *module)
 {
-  dt_iop_clut_global_data_t *gd = (dt_iop_clut_global_data_t *)module->data;
-  fprintf(stderr, "[cleanup_global]: bpp=%d\n", gd->clut_bpp);
+  fprintf(stderr,"[cleanup_global]: entry\n");
+
+  dt_iop_clut_data_t *d = (dt_iop_clut_data_t *)module->data;
+  fprintf(stderr, "[cleanup_global]: bpp=%d\n", d->clut_bpp);
   free(module->data);
   module->data = NULL;
 }
@@ -394,6 +374,8 @@ void cleanup_global(dt_iop_module_so_t *module)
 /** gui callbacks, these are needed. */
 void gui_update(dt_iop_module_t *self)
 {
+  fprintf(stderr,"[gui_update]: entry\n");
+
   // let gui slider match current parameters:
   //dt_iop_useless_gui_data_t *g = (dt_iop_useless_gui_data_t *)self->gui_data;
   //dt_iop_useless_params_t *p = (dt_iop_useless_params_t *)self->params;
@@ -402,9 +384,11 @@ void gui_update(dt_iop_module_t *self)
 
 void gui_init(dt_iop_module_t *self)
 {
+  fprintf(stderr,"[gui_init]: entry\n");
   // init the slider (more sophisticated layouts are possible with gtk tables and boxes):
   self->gui_data = malloc(sizeof(dt_iop_clut_gui_data_t));
   dt_iop_clut_gui_data_t *g = (dt_iop_clut_gui_data_t *)self->gui_data;
+  dt_iop_clut_data_t *d = (dt_iop_clut_data_t *)self->data;
 
   self->widget = gtk_scrolled_window_new(NULL, NULL);
   gtk_widget_set_size_request(self->widget, -1, DT_PIXEL_APPLY_DPI(208));
@@ -413,7 +397,19 @@ void gui_init(dt_iop_module_t *self)
   gtk_widget_set_size_request(GTK_WIDGET(g->films), DT_PIXEL_APPLY_DPI(50), -1);
   gtk_container_add(GTK_CONTAINER(self->widget), GTK_WIDGET(g->films));
 
-  g->films_list = gtk_list_store_new (2, G_TYPE_STRING, G_TYPE_BOOLEAN);
+  g->films_list = gtk_list_store_new (2, G_TYPE_STRING, G_TYPE_INT);
+  GList *elem = NULL;
+  GtkTreeIter iter;
+  for (elem = d->clut_collection; elem; elem = elem->next)
+  {
+    /* fprintf(stderr,"[gui_init]: add elem\n"); */
+  
+    gtk_list_store_append(g->films_list, &iter);
+    dt_iop_clut_collection_item_t *data = (dt_iop_clut_collection_item_t *)elem->data;
+    gtk_list_store_set (g->films_list, &iter, 0, data->filename, -1);
+    gtk_list_store_set (g->films_list, &iter, 1, data->imgid, -1);
+//    gtk_list_store_set (g->films_list, &iter, 0, "bebebe", -1);
+  }
   gtk_tree_view_set_model(g->films, GTK_TREE_MODEL( g->films_list ));
 
   GtkCellRenderer *renderer;
@@ -425,13 +421,108 @@ void gui_init(dt_iop_module_t *self)
                                                      "text", 0,
                                                      NULL);
   gtk_tree_view_append_column (GTK_TREE_VIEW (g->films), column);
+
+  g_signal_connect(GTK_WIDGET(g->films), "cursor-changed", G_CALLBACK(_dt_iop_clut_row_changed_callback), self);
+
+  // set cursor to the first row (identity clut)
+  gtk_tree_model_get_iter_first (GTK_TREE_MODEL( g->films_list ), &iter);
+  GtkTreePath* path = gtk_tree_model_get_path(GTK_TREE_MODEL( g->films_list ), &iter);
+  gtk_tree_view_set_cursor(g->films, path, NULL, FALSE);
 }
 
 void gui_cleanup(dt_iop_module_t *self)
 {
+  fprintf(stderr,"[gui_cleanup]: entry\n");
   // nothing else necessary, gtk will clean up the slider.
   free(self->gui_data);
   self->gui_data = NULL;
+}
+
+static void _dt_iop_clut_row_changed_callback(GtkTreeView *treeview, dt_iop_module_t *self)
+{
+//  dt_iop_clut_data_t *d = (dt_iop_clut_data_t *)self->data;
+  GtkTreeIter iter;
+  GtkTreeModel *model;
+  GtkTreePath *path;
+  char *film_name = NULL;
+  int imgid = -1;
+
+  fprintf(stderr, "[row_changed_callback]: entry\n");
+  gtk_tree_view_get_cursor(treeview, &path, NULL);
+
+  if(path != NULL)
+  {
+    model = gtk_tree_view_get_model(treeview);
+    gtk_tree_model_get_iter(model, &iter, path);
+    gtk_tree_path_free(path);
+    gtk_tree_model_get(model, &iter, 0, &film_name, -1);
+    gtk_tree_model_get(model, &iter, 1, &imgid, -1);
+    fprintf(stderr, "[row_changed_callback]: film_name: %s\n", film_name);
+    fprintf(stderr, "[row_changed_callback]: imgid: %d\n", imgid);
+    load_clut_by_imgid(imgid, self);
+  }
+
+}
+
+void load_clut_by_imgid(int imgid, dt_iop_module_t *self)
+{
+  fprintf(stderr, "[load_clut_by_imgid]: entry\n");
+  dt_iop_clut_data_t *d = (dt_iop_clut_data_t *)self->data;
+  dt_iop_clut_params_t *p = (dt_iop_clut_params_t *)self->params;
+
+  if(imgid == -1)
+  {
+    fprintf(stderr, "[load_clut_by_imgid]: imgid is -1, loading identity clut\n");
+    return;
+  }
+  
+  if (d->clut_data)
+  {
+    free(d->clut_data);
+    d->clut_data = NULL;
+  }
+
+  dt_mipmap_buffer_t buf;
+  dt_mipmap_cache_get(darktable.mipmap_cache, &buf, imgid, DT_MIPMAP_FULL,DT_MIPMAP_BLOCKING, 'r');
+  const dt_image_t *img = dt_image_cache_get(darktable.image_cache, imgid, 'r');
+  dt_image_t image = *img;
+  dt_image_cache_read_release(darktable.image_cache, img);
+  if(!buf.buf)
+  {
+    dt_control_log(_("failed to get raw buffer from image `%s'"), image.filename);
+    dt_mipmap_cache_release(darktable.mipmap_cache, &buf);
+    return;
+  }
+   
+  uint32_t data_size = image.width * image.height;
+  fprintf(stderr,"[reload_defaults]: data_size: %d\n", data_size);
+  fprintf(stderr,"[reload_defaults]: buf_width: %d\n", buf.width);
+  fprintf(stderr,"[reload_defaults]: img_width: %d\n", image.width);
+  d->clut_size = image.width;
+  d->clut_bpp = image.bpp;
+  d->clut_level = CUBEROOT(image.width);
+  d->clut_data = calloc(data_size, sizeof(dt_iop_clut_color_t));
+  int k = 0;
+  /* float r, g, b; */
+  for (int i = 0; i < data_size; i++)
+  {
+    dt_iop_clut_color_t *c = (dt_iop_clut_color_t *)d->clut_data;
+    float *bb = (float*)buf.buf;
+    c[i].red   = bb[k];
+    c[i].green = bb[k+1];
+    c[i].blue  = bb[k+2];
+    k += 4;
+    /* fprintf(stderr,"r=%3.2f;g=%3.2f;b=%3.2f\t", c[i].red, c[i].green, c[i].blue); */
+  }
+  d->clut_data_size = data_size;
+  /* memcpy(gd->clut_data, buf.buf, data_size); */
+
+  dt_mipmap_cache_release(darktable.mipmap_cache, &buf);
+
+  p->imgid = imgid;
+
+  dt_dev_reprocess_all(self->dev);
+  dt_control_queue_redraw();
 }
 
 gboolean is_valid_clut(const dt_image_t *img)
@@ -445,12 +536,13 @@ gboolean is_valid_clut(const dt_image_t *img)
   return TRUE;
 }
 
-int find_cluts(const char *tag)
+void load_cluts(GList *images, const char *tag)
 {
   fprintf(stderr,"[find_clut]: entry\n");
   gchar *qin = "select distinct id, filename from images where (flags & 256) != 256 and ((id in (select imgid from tagged_images as a join tags as b on a.tagid = b.id where name like 'HaldCLUT BW'))) order by filename, version limit ?1, ?2";
 
-  GList *images = NULL;
+//  GList *images = NULL;
+//  images = NULL;
 
   sqlite3_stmt *stmt;
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), qin, -1, &stmt, NULL);
@@ -458,24 +550,17 @@ int find_cluts(const char *tag)
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, 1000);
   while(sqlite3_step(stmt) == SQLITE_ROW)
   {
+    dt_iop_clut_collection_item_t *item = malloc(sizeof(dt_iop_clut_collection_item_t));
     const unsigned char *filename = sqlite3_column_text(stmt, 1);
+    int imgid = sqlite3_column_int(stmt, 0);
     size_t len = strlen((char*)filename);
-    char *fname = calloc(len+1,sizeof(char));
-    strncpy(fname,(char*)filename,len);
+    item->filename = calloc(len+1,sizeof(char));
+    strncpy(item->filename, (char*)filename, len);
 //    int imgid = sqlite3_column_int(stmt, 0);
-    images = g_list_append(images, fname);
-//    sqlite3_step(stmt);
+    item->imgid = imgid;
+    images = g_list_append(images, item);
   }
   sqlite3_finalize(stmt);
-
-  fprintf(stderr,"[find_cluts]: print images\n");
-  GList *elem = NULL;
-  for(elem = images; elem != NULL; elem = elem->next)
-  {
-    char *s = (char*)elem->data;
-    fprintf(stderr,"item: %s\n", s);
-  }
-  return 0;
 }
 
 /** additional, optional callbacks to capture darkroom center events. */
