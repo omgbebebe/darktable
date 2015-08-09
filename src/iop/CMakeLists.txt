@@ -82,7 +82,7 @@ add_iop(globaltonemap "globaltonemap.c")
 add_iop(bilat "bilat.c")
 add_iop(denoiseprofile "denoiseprofile.c")
 add_iop(defringe "defringe.c")
-add_iop(clut "clut.c")
+add_iop(clut "haldclut.c")
 
 if(RSVG2_FOUND)
   add_iop(watermark "watermark.c")

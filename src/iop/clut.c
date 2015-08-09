@@ -37,12 +37,13 @@ DT_MODULE_INTROSPECTION(1, dt_iop_clut_params_t)
 
 #define CUBEROOT(X) (int)floor(pow(X,1/3.) + 0.5)
 #define CUBE(X) (int)floor(pow(X,3.))
+#define MAX_FILENAME_SIZE 128
 // TODO: some build system to support dt-less compilation and translation!
 
 typedef struct dt_iop_clut_params_t
 {
-  // self->params
   int imgid;
+//  char filename[MAX_FILENAME_SIZE];
 } dt_iop_clut_params_t;
 
 typedef struct dt_iop_clut_gui_data_t
@@ -79,7 +80,6 @@ typedef struct dt_iop_clut_collection_item_t
 
 typedef struct dt_iop_clut_data_t
 {
-  // self->data
   int clut_size;
   int clut_bpp;
   int clut_level;
@@ -100,6 +100,7 @@ gboolean is_valid_clut(const dt_image_t*);
 void load_cluts(GList*, const char*);
 //void load_clut_by_imgid(dt_iop_clut_data_t *d, int imgid);
 void load_clut_by_imgid(int imgid, dt_iop_module_t *self);
+//void load_clut_by_filename(const char* filename, dt_iop_module_t *self);
 /* handle clut selection */
 static void _dt_iop_clut_row_changed_callback(GtkTreeView *treeview, dt_iop_module_t *self);
 
@@ -129,6 +130,18 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *
              const dt_iop_roi_t *roi_in, const dt_iop_roi_t *roi_out)
 {
   const dt_iop_clut_data_t *const d = (dt_iop_clut_data_t *)piece->data;
+  const int ch = piece->colors;
+  const int width = roi_out->width;
+  const int height = roi_out->height;
+//  const int clut_size = d->clut_size;
+
+  if(!d->clut_data)
+  {
+    memcpy(o, i, (size_t)ch * sizeof(float) * roi_out->width * roi_out->height);
+    return;
+  }
+
+  const int level = d->clut_level * d->clut_level;
   fprintf(stderr,"[process]: level=%d\n", d->clut_level);
   fprintf(stderr,"[process]: size=%d\n", d->clut_size);
   fprintf(stderr,"[process]: bpp=%d\n", d->clut_bpp);
@@ -141,11 +154,6 @@ void process(struct dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, void *
   /* } */
   /* fprintf(stderr,"\n"); */
 
-  const int ch = piece->colors;
-  const int width = roi_out->width;
-  const int height = roi_out->height;
-//  const int clut_size = d->clut_size;
-  const int level = d->clut_level * d->clut_level;
 
 #ifdef _OPENMP
 #pragma omp parallel for default(none) schedule(static) shared(i, o, roi_in, roi_out, clut)
@@ -257,9 +265,10 @@ void commit_params(struct dt_iop_module_t *self, dt_iop_params_t *p1, dt_dev_pix
     fprintf(stderr,"[commit_params]: imgid=%d\n", p->imgid);
   }
   
-  dt_iop_clut_data_t *pd = (dt_iop_clut_data_t *)piece->data;
-  dt_iop_clut_data_t *d  = (dt_iop_clut_data_t *)self->data;
+  dt_iop_haldclut_data_t *pd = (dt_iop_haldclut_data_t *)piece->data;
+  dt_iop_haldclut_data_t *d  = (dt_iop_haldclut_data_t *)self->data;
 
+  load_clut_by_imgid(p->imgid, self);
   /* gd->clut_bpp = 123; */
   /* gd->clut_data = calloc(64,sizeof(uint8_t)); */
   /* memset(gd->clut_data, 12, 64); */
